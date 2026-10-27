@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import requests
 
 # Configuration
@@ -32,6 +33,24 @@ def deep_parse(obj):
     return obj
 
 # Lua Table Formatter
+LUA_RESERVED_WORDS = {
+    "and", "break", "do", "else", "elseif", "end", "false", "for",
+    "function", "goto", "if", "in", "local", "nil", "not", "or",
+    "repeat", "return", "then", "true", "until", "while",
+}
+LUA_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+def format_lua_key(key):
+    """Returns a bare key for valid Lua identifiers, bracket notation otherwise."""
+    if isinstance(key, str):
+        if key == "end":
+            key = "end_time"
+        if LUA_IDENTIFIER_PATTERN.match(key) and key not in LUA_RESERVED_WORDS:
+            return key
+        escaped = key.replace("\\", "\\\\").replace('"', '\\"')
+        return f'["{escaped}"]'
+    return str(key)
+
 def to_lua(obj, indent=0):
     """Recursively converts Python dictionaries and lists to formatted Lua tables."""
     spaces = "    " * indent
@@ -40,9 +59,7 @@ def to_lua(obj, indent=0):
             return "{}"
         items = []
         for k, v in obj.items():
-            if k == "end":
-                k = "end_time"
-            key_str = f'["{k}"]' if isinstance(k, str) else str(k)
+            key_str = format_lua_key(k)
             items.append(f"{spaces}    {key_str} = {to_lua(v, indent + 1)}")
         return "{\n" + ",\n".join(items) + f"\n{spaces}}}"
     elif isinstance(obj, list):
@@ -107,68 +124,69 @@ def parse_widget_data(raw_data):
     live_events = raw_data.get("live_events", raw_data)
     if not isinstance(live_events, dict):
         live_events = {}
-        
-    special_events = live_events.get("special_events", [])
-    if not isinstance(special_events, list):
-        special_events = []
-        
-    weekly_event = {}
-    if special_events:
-        active_names = live_events.get("active_events", [])
-        if not isinstance(active_names, list):
-            active_names = []
-            
-        se = special_events[0]
-        for s in special_events:
-            if isinstance(s, dict) and s.get("name") in active_names:
-                se = s
-                break
-        
-        mutators = se.get("mutators", []) if isinstance(se, dict) else []
-        if not isinstance(mutators, list):
-            mutators = []
-            
-        key = mutators[0] if mutators else (se.get("name", "unknown") if isinstance(se, dict) else "unknown")
-        
-        start_ms = se.get("start", 0) if isinstance(se, dict) else 0
-        end_ms = se.get("end", 0) if isinstance(se, dict) else 0
-        
-        weekly_event = {
-            "key": key,
-            "start_time": int(start_ms) // 1000 if isinstance(start_ms, (int, float)) else 0,
-            "end_time": int(end_ms) // 1000 if isinstance(end_ms, (int, float)) else 0
-        }
-        
-    chaos_wastes_list = live_events.get("weekly_chaos_wastes", [])
-    if not isinstance(chaos_wastes_list, list):
-        chaos_wastes_list = []
-        
+
+    def as_dict(value):
+        return value if isinstance(value, dict) else {}
+
+    def as_list(value):
+        return value if isinstance(value, list) else []
+
+    def ms_to_seconds(value):
+        return int(value) // 1000 if isinstance(value, (int, float)) else 0
+
+    # Weekly Chaos Wastes rotation
     chaos_wastes = {}
-    if chaos_wastes_list:
-        cw = chaos_wastes_list[0]
-        if not isinstance(cw, dict):
-            cw = {}
-        gmd = cw.get("game_mode_data", {})
-        if not isinstance(gmd, dict):
-            gmd = {}
-        info = cw.get("information", {})
-        if not isinstance(info, dict):
-            info = {}
-        
-        start_ts = info.get("start_timestamp", 0)
-        end_ts = info.get("end_timestamp", 0)
-        
+    weekly_start = 0
+    weekly_end = 0
+    chaos_list = as_list(live_events.get("weekly_chaos_wastes"))
+    if chaos_list:
+        cw = as_dict(chaos_list[0])
+        gmd = as_dict(cw.get("game_mode_data"))
+        info = as_dict(cw.get("information"))
+        weekly_start = ms_to_seconds(info.get("start_timestamp", 0))
+        weekly_end = ms_to_seconds(info.get("end_timestamp", 0))
         chaos_wastes = {
             "journey": gmd.get("journey_name", "unknown"),
-            "boons": gmd.get("boons", []) if isinstance(gmd.get("boons"), list) else [],
-            "mutators": gmd.get("mutators", []) if isinstance(gmd.get("mutators"), list) else [],
-            "start_time": int(start_ts) // 1000 if isinstance(start_ts, (int, float)) else 0,
-            "end_time": int(end_ts) // 1000 if isinstance(end_ts, (int, float)) else 0
+            "boons": as_list(gmd.get("boons")),
+            "mutators": as_list(gmd.get("mutators")),
+            "start_time": weekly_start,
+            "end_time": weekly_end,
         }
-        
+
+    # Weekly event: sourced from weekly_events
+    weekly_event = {}
+    weekly_list = as_list(live_events.get("weekly_events"))
+    if weekly_list:
+        we_gmd = as_dict(as_dict(weekly_list[0]).get("game_mode_data"))
+        we_mutators = as_list(we_gmd.get("mutators"))
+        weekly_event = {
+            "key": we_mutators[0] if we_mutators else "unknown",
+            "start_time": weekly_start,
+            "end_time": weekly_end,
+        }
+
+    # Special event
+    special_event = {}
+    special_list = as_list(live_events.get("special_events"))
+    if special_list:
+        active_names = as_list(live_events.get("active_events"))
+        se = as_dict(special_list[0])
+        for candidate in special_list:
+            if isinstance(candidate, dict) and candidate.get("name") in active_names:
+                se = candidate
+                break
+        special_event = {
+            "key": se.get("name", "unknown"),
+            "mutators": as_list(se.get("mutators")),
+            "level_keys": as_list(se.get("level_keys")),
+            "start_time": ms_to_seconds(se.get("start", 0)),
+            "end_time": ms_to_seconds(se.get("end", 0)),
+        }
+
     return {
         "weekly_event": weekly_event,
-        "chaos_wastes": chaos_wastes
+        "chaos_wastes": chaos_wastes,
+        "special_event": special_event,
     }
 
 # Fandom Wiki Updater

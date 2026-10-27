@@ -16,6 +16,21 @@ BOT_PASSWORD = os.environ.get("FANDOM_BOT_PASSWORD")
 
 USER_AGENT = "VT2WikiBot/1.0 (Vermintide 2 Fandom Wiki Bot; https://vermintide2.fandom.com)"
 
+# Utility Functions
+def deep_parse(obj):
+    """Recursively parses JSON strings embedded within dictionaries or lists."""
+    if isinstance(obj, str):
+        try:
+            parsed = json.loads(obj)
+            return deep_parse(parsed)
+        except (json.JSONDecodeError, ValueError):
+            return obj
+    elif isinstance(obj, dict):
+        return {k: deep_parse(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [deep_parse(i) for i in obj]
+    return obj
+
 # Lua Table Formatter
 def to_lua(obj, indent=0):
     """Recursively converts Python dictionaries and lists to formatted Lua tables."""
@@ -80,44 +95,75 @@ def fetch_playfab_data():
         print(f"Cloud script execution failed: {json.dumps(events_resp, indent=2)}")
         raise Exception("Cloud script execution failed.")
         
-    return events_resp["data"].get("FunctionResult", {})
+    function_result = events_resp["data"].get("FunctionResult", {})
+    return deep_parse(function_result)
 
 def parse_widget_data(raw_data):
     """Extracts and structures relevant data for the wiki widget."""
+    if not isinstance(raw_data, dict):
+        print(f"Warning: Expected dictionary from PlayFab, received {type(raw_data)}.")
+        raw_data = {}
+
     live_events = raw_data.get("live_events", raw_data)
-    
+    if not isinstance(live_events, dict):
+        live_events = {}
+        
     special_events = live_events.get("special_events", [])
+    if not isinstance(special_events, list):
+        special_events = []
+        
     weekly_event = {}
     if special_events:
         active_names = live_events.get("active_events", [])
+        if not isinstance(active_names, list):
+            active_names = []
+            
         se = special_events[0]
         for s in special_events:
-            if s.get("name") in active_names:
+            if isinstance(s, dict) and s.get("name") in active_names:
                 se = s
                 break
         
-        mutators = se.get("mutators", [])
-        key = mutators[0] if mutators else se.get("name", "unknown")
+        mutators = se.get("mutators", []) if isinstance(se, dict) else []
+        if not isinstance(mutators, list):
+            mutators = []
+            
+        key = mutators[0] if mutators else (se.get("name", "unknown") if isinstance(se, dict) else "unknown")
+        
+        start_ms = se.get("start", 0) if isinstance(se, dict) else 0
+        end_ms = se.get("end", 0) if isinstance(se, dict) else 0
         
         weekly_event = {
             "key": key,
-            "start_time": se.get("start", 0) // 1000,
-            "end_time": se.get("end", 0) // 1000
+            "start_time": int(start_ms) // 1000 if isinstance(start_ms, (int, float)) else 0,
+            "end_time": int(end_ms) // 1000 if isinstance(end_ms, (int, float)) else 0
         }
         
     chaos_wastes_list = live_events.get("weekly_chaos_wastes", [])
+    if not isinstance(chaos_wastes_list, list):
+        chaos_wastes_list = []
+        
     chaos_wastes = {}
     if chaos_wastes_list:
         cw = chaos_wastes_list[0]
+        if not isinstance(cw, dict):
+            cw = {}
         gmd = cw.get("game_mode_data", {})
+        if not isinstance(gmd, dict):
+            gmd = {}
         info = cw.get("information", {})
+        if not isinstance(info, dict):
+            info = {}
+        
+        start_ts = info.get("start_timestamp", 0)
+        end_ts = info.get("end_timestamp", 0)
         
         chaos_wastes = {
             "journey": gmd.get("journey_name", "unknown"),
-            "boons": gmd.get("boons", []),
-            "mutators": gmd.get("mutators", []),
-            "start_time": info.get("start_timestamp", 0) // 1000,
-            "end_time": info.get("end_timestamp", 0) // 1000
+            "boons": gmd.get("boons", []) if isinstance(gmd.get("boons"), list) else [],
+            "mutators": gmd.get("mutators", []) if isinstance(gmd.get("mutators"), list) else [],
+            "start_time": int(start_ts) // 1000 if isinstance(start_ts, (int, float)) else 0,
+            "end_time": int(end_ts) // 1000 if isinstance(end_ts, (int, float)) else 0
         }
         
     return {

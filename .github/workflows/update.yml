@@ -1,0 +1,28 @@
+name: Update VT2 Wiki Event Widget
+
+on:
+  schedule:
+    # Runs at minute 0 past every 6th hour
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allows you to click "Run workflow" manually in the GitHub UI
+
+jobs:
+  update-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run Bot
+        env:
+          FANDOM_BOT_USERNAME: ${{ secrets.FANDOM_BOT_USERNAME }}
+          FANDOM_BOT_PASSWORD: ${{ secrets.FANDOM_BOT_PASSWORD }}
+        run: python bot.py

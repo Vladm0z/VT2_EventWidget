@@ -91,7 +91,7 @@ def fetch_playfab_data():
         "User-Agent": USER_AGENT
     })
     
-    print("Authenticating with PlayFab...")
+    print("Authenticating with PlayFab")
     login_payload = {"TitleId": TITLE_ID, "CustomId": CUSTOM_ID, "CreateAccount": True}
     login_resp = session.post(f"{BASE_URL}/Client/LoginWithCustomID", json=login_payload).json()
     if login_resp.get("code") != 200:
@@ -101,7 +101,7 @@ def fetch_playfab_data():
     ticket = login_resp["data"]["SessionTicket"]
     session.headers["X-Authorization"] = ticket
     
-    print("Fetching live events via cloud script...")
+    print("Fetching live events via cloud script")
     cloud_payload = {
         "FunctionName": "getLiveEvents",
         "FunctionParameter": {"id": 1, "metadata": {}},
@@ -165,7 +165,7 @@ def parse_widget_data(raw_data):
             "end_time": weekly_end,
         }
 
-    # Special event
+    # Special events (Active single entry)
     special_event = {}
     special_list = as_list(live_events.get("special_events"))
     if special_list:
@@ -183,10 +183,23 @@ def parse_widget_data(raw_data):
             "end_time": ms_to_seconds(se.get("end", 0)),
         }
 
+    # Special events: store the full announced list plus the active entry
+    special_events = []
+    for candidate in special_list:
+        if isinstance(candidate, dict):
+            special_events.append({
+                "key": candidate.get("name", "unknown"),
+                "mutators": as_list(candidate.get("mutators")),
+                "level_keys": as_list(candidate.get("level_keys")),
+                "start_time": ms_to_seconds(candidate.get("start", 0)),
+                "end_time": ms_to_seconds(candidate.get("end", 0)),
+            })
+
     return {
         "weekly_event": weekly_event,
         "chaos_wastes": chaos_wastes,
         "special_event": special_event,
+        "special_events": special_events,
     }
 
 # Fandom Wiki Updater
@@ -201,7 +214,7 @@ def update_fandom_wiki(lua_content):
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
     
-    print("Requesting Fandom login token...")
+    print("Requesting Fandom login token")
     resp = session.get(FANDOM_API_URL, params={
         "action": "query", "meta": "tokens", "type": "login", "format": "json"
     }).json()
@@ -212,7 +225,7 @@ def update_fandom_wiki(lua_content):
         
     login_token = resp["query"]["tokens"]["logintoken"]
     
-    print("Authenticating with Fandom...")
+    print("Authenticating with Fandom")
     resp = session.post(FANDOM_API_URL, data={
         "action": "login", "lgname": BOT_USERNAME, "lgpassword": BOT_PASSWORD,
         "lgtoken": login_token, "format": "json"
@@ -224,7 +237,7 @@ def update_fandom_wiki(lua_content):
         print(f"Response details: {json.dumps(resp, indent=2)}")
         raise Exception(f"Fandom authentication failed: {login_result}")
         
-    print("Requesting Fandom CSRF token...")
+    print("Requesting Fandom CSRF token")
     resp = session.get(FANDOM_API_URL, params={
         "action": "query", "meta": "tokens", "format": "json"
     }).json()
@@ -235,7 +248,7 @@ def update_fandom_wiki(lua_content):
         
     csrf_token = resp["query"]["tokens"]["csrftoken"]
     
-    print(f"Updating page: {TARGET_PAGE}...")
+    print(f"Updating page: {TARGET_PAGE}")
     resp = session.post(FANDOM_API_URL, data={
         "action": "edit",
         "title": TARGET_PAGE,
@@ -254,7 +267,7 @@ def update_fandom_wiki(lua_content):
 
 if __name__ == "__main__":
     try:
-        print("Initializing VT2 Wiki Bot...")
+        print("Initializing VT2 Wiki Bot")
         raw_data = fetch_playfab_data()
         widget_data = parse_widget_data(raw_data)
         

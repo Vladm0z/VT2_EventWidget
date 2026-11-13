@@ -2,9 +2,8 @@ name: Update VT2 Wiki Event Widget
 
 on:
   schedule:
-    # Runs at minute 0 past every 6th hour
     - cron: '0 */6 * * *'
-  workflow_dispatch: # Allows you to click "Run workflow" manually in the GitHub UI
+  workflow_dispatch:
 
 jobs:
   update-wiki:

@@ -2,7 +2,7 @@ name: Update VT2 Wiki Event Widget
 
 on:
   schedule:
-    - cron: '10 */3 * * *'
+    - cron: '18 */3 * * *'
   workflow_dispatch:
 
 jobs:

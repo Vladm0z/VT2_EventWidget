@@ -27,6 +27,11 @@ BOT_PASSWORD = os.environ.get("FANDOM_BOT_PASSWORD")
 
 USER_AGENT = "VT2WikiBot/2.0 (Vermintide 2 Fandom Wiki Bot; https://vermintide2.fandom.com)"
 REQUEST_TIMEOUT = 25
+WOLF_FATHER_CACHE_FILE = os.environ.get(
+    "WOLF_FATHER_CACHE_FILE",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "wolf_father_cache.json"),
+)
+WOLF_FATHER_POST_EVENT_SECONDS = 3 * 86400
 
 # Constants from scripts/settings/dlcs/morris/deus_journey_settings.lua
 AVAILABLE_JOURNEY_ORDER = [
@@ -103,6 +108,33 @@ def parse_http_date_ms(resp):
         except (TypeError, ValueError):
             pass
     return int(time.time() * 1000)
+
+
+def load_wolf_father_cache():
+    """Loads the last valid calendar so its final claim windows survive API removal."""
+    try:
+        with open(WOLF_FATHER_CACHE_FILE, "r", encoding="utf-8") as handle:
+            cached = json.load(handle)
+        return cached if isinstance(cached, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def save_wolf_father_cache(calendar):
+    """Atomically persists a normalized Wolf-Father calendar."""
+    if not isinstance(calendar, dict) or not calendar.get("days"):
+        return
+    tmp_path = WOLF_FATHER_CACHE_FILE + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(calendar, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp_path, WOLF_FATHER_CACHE_FILE)
+    except OSError as exc:
+        print(f"Warning: could not save Wolf-Father cache: {exc}")
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 # Lua Table Formatter
@@ -298,6 +330,8 @@ def fetch_playfab_data():
     belakor_res, belakor_ms = execute_cloud_script(session, "deusSetBelakorCurse", {})
     deus_res, deus_ms = execute_cloud_script(session, "deusPlayerSetup", {})
     if as_dict(as_dict(deus_res).get("deus_journey_cycle_data")).get("remaining_time_ms", 0) < 0:
+        # First call after an expired week updates stored cycle state on PlayFab;
+        # a single immediate re-read returns the fresh positive remaining_time_ms.
         deus_res, deus_ms = execute_cloud_script(session, "deusPlayerSetup", {})
     print("Fetching Lohner's Emporium store items")
     store_resp = {}
@@ -527,8 +561,18 @@ def parse_current_data(bundle):
             "total_rewards": total_rewards,
             "start_time": wf_start,
             "end_time": wf_end,
+            "display_end_time": wf_end + WOLF_FATHER_POST_EVENT_SECONDS if wf_end else 0,
+            "updated_at": int(time.time()),
             "days": days,
         }
+        save_wolf_father_cache(wolf_father)
+    else:
+        cached_wolf_father = load_wolf_father_cache()
+        cached_end = ms_to_seconds(cached_wolf_father.get("end_time", 0))
+        if cached_end and int(time.time()) < cached_end + WOLF_FATHER_POST_EVENT_SECONDS:
+            cached_wolf_father["active"] = int(time.time()) < cached_end
+            cached_wolf_father["display_end_time"] = cached_end + WOLF_FATHER_POST_EVENT_SECONDS
+            wolf_father = cached_wolf_father
 
     # Chaos Wastes Be'lakor Invasion & Chaos God Curse Cycles
     belakor_active_cfg = as_dict(title_data.get("belakor_active"))
@@ -724,6 +768,8 @@ def parse_store_data(bundle):
 
 
 def stabilize_cycle_timestamps(current_data, existing_lua_text):
+    """Prevents 1-2s HTTP latency jitter from triggering unnecessary wiki edits
+    when cycle_count has not changed since the previous bot run."""
     if not existing_lua_text:
         return
     cycles = as_dict(current_data.get("chaos_wastes_cycles"))
@@ -752,6 +798,7 @@ def stabilize_cycle_timestamps(current_data, existing_lua_text):
 
 # Fandom Wiki Updater
 def get_fandom_page_text(session, title):
+    """Fetches current raw text of a Fandom page (or None if missing)."""
     resp = session.get(
         FANDOM_API_URL,
         params={
@@ -775,6 +822,7 @@ def get_fandom_page_text(session, title):
 
 
 def create_authenticated_fandom_session():
+    """Authenticates with Fandom once and returns (session, csrf_token)."""
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT})
 
@@ -818,6 +866,7 @@ def create_authenticated_fandom_session():
 
 
 def edit_fandom_page_if_changed(session, csrf_token, title, new_text, summary, existing_text=None):
+    """Updates a Fandom module page only if its content actually changed."""
     if existing_text is None:
         existing_text = get_fandom_page_text(session, title)
 
@@ -848,6 +897,7 @@ def edit_fandom_page_if_changed(session, csrf_token, title, new_text, summary, e
 
 
 def publish_to_wiki(current_data, store_data):
+    """Publishes Module:EventWidget/Data/Current and Module:EventWidget/Data/Store."""
     has_store = store_data.get("counts", {}).get("total", 0) > 0
 
     if not BOT_USERNAME or not BOT_PASSWORD:

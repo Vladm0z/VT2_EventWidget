@@ -348,6 +348,21 @@ def fetch_playfab_data():
     except Exception as exc:
         print(f"Warning: GetStoreItems exception: {exc}")
 
+    print("Fetching PlayFab catalog metadata for event membership")
+    catalog_resp = {}
+    try:
+        r_catalog = session.post(
+            f"{BASE_URL}/Client/GetCatalogItems",
+            json={},
+            timeout=REQUEST_TIMEOUT,
+        ).json()
+        if r_catalog.get("code") == 200:
+            catalog_resp = deep_parse(as_dict(r_catalog.get("data")))
+        else:
+            print(f"Warning: GetCatalogItems failed: {json.dumps(r_catalog)}")
+    except Exception as exc:
+        print(f"Warning: GetCatalogItems exception: {exc}")
+
     return {
         "title_data": title_data,
         "live_events_res": live_events_res,
@@ -359,6 +374,7 @@ def fetch_playfab_data():
         "deus_res": deus_res,
         "deus_ms": deus_ms,
         "store_resp": store_resp,
+        "catalog_resp": catalog_resp,
     }
 
 
@@ -632,6 +648,8 @@ def parse_store_data(bundle):
     title_data = as_dict(bundle.get("title_data"))
     store_resp = as_dict(bundle.get("store_resp"))
     raw_store = as_list(store_resp.get("Store"))
+    catalog_resp = as_dict(bundle.get("catalog_resp"))
+    raw_catalog = as_list(catalog_resp.get("Catalog"))
 
     marketing = as_dict(as_dict(store_resp.get("MarketingData")).get("Metadata"))
     uploaded = marketing.get("uploaded", "")
@@ -701,6 +719,41 @@ def parse_store_data(bundle):
                     ev_entry["end_time_raw"] = raw_end
                 event_items.append(ev_entry)
 
+    # Seasonal Emporium membership comes from Catalog CustomData.events.
+    # Availability and price come independently from GetStoreItems. Keeping
+    # only IDs here avoids duplicating names, images, links, or descriptions.
+    event_membership = {}
+    type_buckets = {
+        "weapon_skin": "weapons",
+        "skin": "skins",
+        "hat": "skins",
+        "frame": "frames",
+    }
+    sm_available = set(sm_items)
+    for catalog_item in raw_catalog:
+        if not isinstance(catalog_item, dict):
+            continue
+        key = str(catalog_item.get("ItemId") or "")
+        if not key or key not in sm_available:
+            continue
+        custom = deep_parse(catalog_item.get("CustomData", {}))
+        custom = as_dict(custom)
+        events = as_list(custom.get("events"))
+        bucket_name = type_buckets.get(str(custom.get("item_type") or ""))
+        if not events or not bucket_name:
+            continue
+        for event_key in events:
+            if not isinstance(event_key, str) or not event_key:
+                continue
+            event = event_membership.setdefault(event_key, {
+                "weapons": [], "skins": [], "frames": []
+            })
+            event[bucket_name].append(key)
+
+    for event in event_membership.values():
+        for bucket_name in ("weapons", "skins", "frames"):
+            event[bucket_name] = sorted(set(event[bucket_name]))
+
     # Featured storefront from TitleData["store_layout_override"]
     layout_override = as_dict(title_data.get("store_layout_override"))
     pages = as_dict(layout_override.get("pages"))
@@ -759,6 +812,7 @@ def parse_store_data(bundle):
         "counts": counts,
         "discounts": discounts,
         "event_items": event_items,
+        "event_membership": event_membership,
         "featured": featured,
         "items": {
             "sm": sm_items,

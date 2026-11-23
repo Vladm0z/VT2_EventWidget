@@ -174,7 +174,7 @@ def escape_lua_str(s):
 
 def to_lua(obj, indent=0):
     """Recursively converts Python dicts and lists to clean formatted Lua tables."""
-    spaces = "    " * indent
+    spaces = "\t" * indent
     if isinstance(obj, dict):
         if not obj:
             return "{}"
@@ -183,7 +183,7 @@ def to_lua(obj, indent=0):
             if v is None:
                 continue
             key_str = format_lua_key(k)
-            items.append(f"{spaces}    {key_str} = {to_lua(v, indent + 1)}")
+            items.append(f"{spaces}\t{key_str} = {to_lua(v, indent + 1)}")
         if not items:
             return "{}"
         return "{\n" + ",\n".join(items) + f"\n{spaces}}}"
@@ -202,7 +202,7 @@ def to_lua(obj, indent=0):
             inline = "{ " + ", ".join(items) + " }"
             if len(inline) <= 100:
                 return inline
-        items = [f"{spaces}    {to_lua(x, indent + 1)}" for x in obj]
+        items = [f"{spaces}\t{to_lua(x, indent + 1)}" for x in obj]
         return "{\n" + ",\n".join(items) + f"\n{spaces}}}"
     if isinstance(obj, bool):
         return "true" if obj else "false"
